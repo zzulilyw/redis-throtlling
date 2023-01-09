@@ -1,13 +1,9 @@
 package com.lyw.core.timewindow;
 
 import com.lyw.core.TimeWindow;
-import io.lettuce.core.LettuceFutures;
-import io.lettuce.core.Range;
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.RedisFuture;
-import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.api.async.RedisAsyncCommands;
-import io.lettuce.core.api.sync.RedisCommands;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
 
 import java.time.LocalDateTime;
 import java.util.Timer;
@@ -32,33 +28,33 @@ public class TimeWindowServiceImpl implements TimeWindow {
 
     private String key;
 
-    private RedisClient redisClient;
+    private Jedis jedis;
     /**
      * 记录上次的执行时间，更新下次的时间
      */
     private long lastMillis;
 
-    public TimeWindowServiceImpl(RedisClient redisClient){
+    public TimeWindowServiceImpl(Jedis jedis) {
         this.time = 1;
         this.timeUnit = TimeUnit.MINUTES;
         this.count = 100L;
-        this.redisClient = redisClient;
+        this.jedis = jedis;
         this.key = prefix + UUID.randomUUID().toString();
         this.lastMillis = System.currentTimeMillis();
         initTask();
     }
 
-    public TimeWindowServiceImpl(long time, TimeUnit timeUnit, long count, RedisClient redisClient){
+    public TimeWindowServiceImpl(long time, TimeUnit timeUnit, long count, Jedis jedis) {
         this.time = time;
         this.timeUnit = timeUnit;
         this.count = count;
-        this.redisClient = redisClient;
+        this.jedis = jedis;
         this.key = prefix + UUID.randomUUID().toString();
         this.lastMillis = System.currentTimeMillis();
         initTask();
     }
 
-    private void initTask(){
+    private void initTask() {
         Timer timer = new Timer();
         long l = timeUnit.toMillis(time);
         timer.scheduleAtFixedRate(new TimerTask() {
@@ -72,36 +68,33 @@ public class TimeWindowServiceImpl implements TimeWindow {
 
     /**
      * TODO 添加之后要进行校验
+     *
      * @param token
      * @return
      */
     @Override
     public boolean canAccess(String token) {
-        StatefulRedisConnection<String, String> connect = redisClient.connect();
-        RedisAsyncCommands<String, String> async = connect.async();
-        connect.setAutoFlushCommands(false);
-        RedisFuture<Long> zcount1 = async.zcount(key, Range.unbounded());
-        RedisFuture<Long> zadd = async.zadd(key, System.currentTimeMillis(), token);
-        RedisFuture<Long> zcount = async.zcount(key, Range.unbounded());
-        connect.flushCommands();
-        LettuceFutures.awaitAll(10, TimeUnit.SECONDS, zcount1, zadd, zcount);
-        try {
-            Long c = zcount.get();
-            return c - 1 <= count;
-        } catch (InterruptedException e) {
-            return false;
-        } catch (ExecutionException e) {
-            throw new RuntimeException(e);
+        Pipeline pipelined = jedis.pipelined();
+        Response<Long> zcount1 = pipelined.zcount(key, 0, -1);
+        Response<Long> zadd = pipelined.zadd(key, System.currentTimeMillis(), token);
+        Response<Long> zcount = pipelined.zcount(key, 0, -1);
+        pipelined.sync();
+
+        Long c = zcount.get();
+        Long c1 = zcount1.get();
+        if (c1 + 1 != c){
+            System.out.println("出现并发问题");
         }
+        return c - 1 <= count;
+
     }
 
 
     /**
      * 删除redis
      */
-    public void renew(long millis){
-        RedisCommands<String, String> sync = redisClient.connect().sync();
-        sync.zremrangebyrank(key, 0, millis);
+    public void renew(long millis) {
+        jedis.zremrangeByRank(key, 0, millis);
     }
 
 
