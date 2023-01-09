@@ -1,10 +1,7 @@
 package com.lyw.core.tokenbucket;
 
 import com.lyw.core.ThrottlingService;
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.ScriptOutputType;
-import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.api.sync.RedisCommands;
+import redis.clients.jedis.Jedis;
 
 import java.util.*;
 
@@ -16,11 +13,11 @@ public class TokenBucketServiceImpl implements ThrottlingService {
 
     private static String prefix = "throttling:funnel:";
 
-    private RedisClient redisClient;
-
-    public TokenBucketServiceImpl(RedisClient redisClient) {
-        this.redisClient = redisClient;
+    private Jedis jedis;
+    public TokenBucketServiceImpl(Jedis jedis){
+        this.jedis = jedis;
     }
+
 
     @Override
     public boolean canAccess(String token) {
@@ -28,12 +25,8 @@ public class TokenBucketServiceImpl implements ThrottlingService {
     }
 
     public boolean canAccess(String token, int capacity, int quota, int operations, int seconds) {
-        StatefulRedisConnection<String, String> connect = redisClient.connect();
-        RedisCommands<String, String> sync = connect.sync();
-        List<Long> result = sync.eval("return redis.call('cl.throttle', KEYS[1], ARGV[1], ARGV[2], ARGV[3], ARGV[4])",
-                ScriptOutputType.MULTI,
-                new String[]{prefix + token},
-                String.valueOf(capacity), String.valueOf(operations), String.valueOf(seconds), String.valueOf(quota));
+        List<Long> result = (List<Long>) jedis.eval("return redis.call('cl.throttle', KEYS[1], ARGV[1], ARGV[2], ARGV[3], ARGV[4])",
+                Arrays.asList(prefix + token), Arrays.asList(String.valueOf(capacity), String.valueOf(operations), String.valueOf(seconds), String.valueOf(quota)));
         return result.get(0) == 0L;
     }
 }
